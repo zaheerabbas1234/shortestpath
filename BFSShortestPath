@@ -1,0 +1,114 @@
+package com.shortestpath;
+
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.io.IntWritable;
+import org.apache.hadoop.io.Text;
+import org.apache.hadoop.mapreduce.*;
+import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
+import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
+
+import java.io.IOException;
+
+public class BFSShortestPath {
+
+    // Mapper class
+    public static class BFSMapper extends Mapper<Object, Text, Text, IntWritable> {
+        private Text person = new Text();
+        private IntWritable distance = new IntWritable();
+
+        @Override
+        protected void map(Object key, Text value, Context context) throws IOException, InterruptedException {
+            String line = value.toString();
+            String[] parts = line.split("\t");
+
+            // Get the person and their friends
+            String currentPerson = parts[0];
+            String[] friends = parts[1].split(",");
+            int currentDistance = Integer.parseInt(parts[2]);
+
+            // Emit the friends with a distance incremented by 1
+            for (String friend : friends) {
+                person.set(friend);
+                distance.set(currentDistance + 1);
+                context.write(person, distance);
+            }
+
+            // Emit the current person with the current distance
+            person.set(currentPerson);
+            distance.set(currentDistance);
+            context.write(person, distance);
+        }
+    }
+
+    // Reducer class
+    public static class BFSReducer extends Reducer<Text, IntWritable, Text, IntWritable> {
+        private IntWritable result = new IntWritable();
+
+        @Override
+        protected void reduce(Text key, Iterable<IntWritable> values, Context context) throws IOException, InterruptedException {
+            int minDistance = Integer.MAX_VALUE;
+
+            // Find the minimum distance from the emitted values
+            for (IntWritable val : values) {
+                minDistance = Math.min(minDistance, val.get());
+            }
+
+            // Emit the node and the minimum distance
+            result.set(minDistance);
+            context.write(key, result);
+        }
+    }
+
+    // Driver class with all code inside main method
+    public static void main(String[] args) throws Exception {
+        
+        // Configuration setup
+        Configuration conf = new Configuration();
+        conf.set("currentDistance", "0");
+
+        // Job setup
+        Job job = Job.getInstance(conf, "BFS Shortest Path");
+        job.setJarByClass(BFSShortestPath.class);
+
+        // Set Mapper and Reducer classes
+        job.setMapperClass(BFSMapper.class);
+        job.setReducerClass(BFSReducer.class);
+
+        // Set output key and value classes
+        job.setOutputKeyClass(Text.class);
+        job.setOutputValueClass(IntWritable.class);
+
+        // First round: input and output paths
+        String inputPath = args[0];
+        String outputPath = args[1];
+
+        FileInputFormat.addInputPath(job, new Path(inputPath));
+        FileOutputFormat.setOutputPath(job, new Path(outputPath));
+
+        // Run the job
+        boolean success = job.waitForCompletion(true);
+
+        // Check if the job was successful
+        if (!success) {
+            System.exit(1);
+        }
+
+        // Multiple rounds: update distances
+        int rounds = Integer.parseInt(conf.get("rounds", "10")); // Limit rounds to prevent infinite loops
+        for (int round = 1; round < rounds; round++) {
+            // Prepare for the next round
+            Path input = new Path(outputPath + "/part-r-00000");
+            Path output = new Path(outputPath + "_round_" + round);
+
+            FileInputFormat.addInputPath(job, input);
+            FileOutputFormat.setOutputPath(job, output);
+
+            success = job.waitForCompletion(true);
+
+            if (!success) {
+                System.exit(1);
+            }
+        }
+    }
+}
